@@ -166,7 +166,8 @@ def gen(all_sub):
                 ) for idx in query_label
             ]
             , axis=0)
-        yield (support, query), (support_label, query_label)
+        # yield (support, query), (support_label, query_label)
+        return (support, query), (support_label, query_label)
 
 
 def gen_source():
@@ -176,7 +177,7 @@ def gen_source():
 def gen_target():
     return gen(target_sub)
 
-
+g = gen(source_sub)
 data_source = tf.data.Dataset.from_generator(gen_source,
                                              output_types=((tf.float32, tf.float32), (tf.float32, tf.float32)),
                                              output_shapes=(((WAYS * SHOTS, W, H, CH), (QUERIES, W, H, CH)),
@@ -239,10 +240,6 @@ class MAML(keras.Model):
 
 
 # MAML需要在每次進行task training前將model weight儲存，因此先設好function
-
-# In[11]:
-
-
 def copy_model(model, x):
     copied_model = MAML(num_cls=WAYS)
     # If we don't run this step the weights are not "initialized"

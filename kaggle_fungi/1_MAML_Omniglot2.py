@@ -35,177 +35,11 @@ from tqdm.auto import tqdm
 
 import tensorflow as tf
 from tensorflow import keras
+import pandas as pd
 
 gpus = tf.config.experimental.list_physical_devices(device_type="GPU")
 for gpu in gpus:
     tf.config.experimental.set_memory_growth(device=gpu, enable=True)
-
-# Config
-WAYS = 3
-SHOTS = 5
-QUERIES = 1
-
-# # Data Loader
-# 首先讀取資料夾名稱
-# DATA_DIR = './Omniglot_splited'
-# # training v.s test Omniglot classes
-# source_classes = glob(DATA_DIR + '/images_background/*/*')
-# target_classes = glob(DATA_DIR + '/images_evaluation/*/*')
-# print(f'字符種類 train: test = {len(source_classes)} : {len(target_classes)}')
-
-source_classes = glob('source/*')
-target_classes = glob('target_s/*')
-print(f'train: test = {len(source_classes)} : {len(target_classes)}')
-
-# dataset 結構: images_background/語言/字符id
-# source_classes[:5]
-
-# 觀察圖片內容
-path = np.random.choice(glob('source/*/*.JPG'), 1)[0]
-img = cv2.imread(path)
-print(img.shape)
-print(path)
-plt.imshow(img)
-plt.show()
-
-'''
-# #### Read Data
-# 
-# **1.製作讀取圖案並前處理的function**
-# 
-# 使用cv2.imread讀檔案時，因為後續我們會使用tf.data.Dataset.list_files來列舉檔案名稱變成tf tensor，所以使用.numpy.decode()將其解碼為文字
-# 
-# 前處理會將圖片從0-255拉到0-1之間，然後取圖片中間長寬為min_of_shape的區塊，這個大小是元圖長、寬中較小的那個值。
-# 
-# 最後RESIZE到W,H大小
-# 
-# 因為這組圖都是黑白的，所以原本的png檔讀出來後我只要RGB中任一channel就好了
-'''
-
-W, H, CH = 64, 64, 1
-
-
-def load_img(path, width=W, hight=H):
-    img = cv2.imread(path.numpy().decode())[..., 0].astype(np.float32) / 255.
-    min_of_shape = np.min(img.shape[:2])
-    oh = (img.shape[0] - min_of_shape) // 2
-    ow = (img.shape[1] - min_of_shape) // 2
-    center_square = np.array([width, hight]) // 2
-    new_size = (width, hight)
-
-    # cropping + resize
-    img = img[oh:oh + min_of_shape, ow:ow + min_of_shape]
-    img = np.expand_dims(cv2.resize(img, new_size), -1)
-    # img = cv2.resize(img, new_size)
-    return tf.constant(img - 0.5)
-
-
-# SUFFIX = '.JPG'
-
-'''
-# **2. 製作 Data Loader**
-# 使用兩層tf.data.Dataset class來完成:
-# 第一層random選取class，第二層random選取照片
-# 
-# 實作上，第一層的loader會隨機去抽第二層的loader。
-
-# 套用指定的way數、shot數、query數等等參數，製作data loader
-'''
-
-map_fun = lambda string: tf.py_function(func=load_img, inp=[string], Tout=tf.float32)
-# 指定抽照片的loader，每個class各有一個tf.data.Dataset.list_files的loader
-# 這邊要指定格式化不然會有bug, 會搜到多餘的暫存檔案
-# source_sub = [tf.data.Dataset.list_files(os.path.join(sc, '????_??.png'), shuffle=True)
-#                   .map(map_fun)
-#               for sc in source_classes]
-# target_sub = [tf.data.Dataset.list_files(os.path.join(sc, '????_??.png'), shuffle=True)
-#                   .map(map_fun)
-#               for sc in target_classes]
-source_sub = []
-for sc in source_classes:
-    path = os.path.join(sc, '*.JPG')
-    nd = tf.data.Dataset.list_files(path, shuffle=True).map(map_fun)
-    source_sub.append(nd)
-target_sub = []
-for sc in target_classes:
-    path = os.path.join(sc, '*.JPG')
-    nd = tf.data.Dataset.list_files(path, shuffle=True).map(map_fun)
-    target_sub.append(nd)
-
-
-# 使用tf.data.Dataset.from_generator作class loader 的loader時需要呼叫一個函數
-# 因此這邊組一個函數丟給它
-def gen(all_sub):
-    # 這個函數會丟進一個list的file loader，首先先permute一下順序，目的是希望打亂task進到model的順序
-    order = np.random.permutation(len(all_sub))
-    for tasks in range(len(all_sub) // WAYS):
-        # 每次抽取WAYS個file loader，後面使用batch來抽數張照片
-        # prefetch可以將資料先放進memory中WAYS個batch，下個batch要用就會比較快
-        # picked = [all_sub[tt] for tt in order[WAYS * tasks:WAYS * (tasks + 1)]]
-        picked = []
-        for tt in (order[WAYS * tasks:WAYS * (tasks + 1)]):
-            picked.append(all_sub[tt])
-        # # Support
-        # support = tf.concat(
-        #     [
-        #         next(
-        #             iter(
-        #                 sub.batch(SHOTS).prefetch(WAYS)
-        #             )
-        #         ) for sub in picked
-        #     ]
-        #     , axis=0)
-        # for sub in picked:
-        #     print(next(iter(sub.batch(5).prefetch(3))))
-        data = []
-        for sub in picked:
-            data.append(next(iter(sub.batch(SHOTS).prefetch(WAYS))))
-        support = tf.concat(data, axis=0)
-
-        # 這邊每個task的label都是自己取的，編號從0開始加到WAYS-1
-        support_label = tf.repeat(tf.range(WAYS, dtype=tf.float32), SHOTS)
-        # Shuffle support
-        order2 = np.random.permutation(WAYS * SHOTS)
-        support = tf.stack([support[ii] for ii in order2])
-        support_label = tf.stack([support_label[ii] for ii in order2])
-
-        # Query
-        query_label = np.random.choice(range(WAYS), size=QUERIES, replace=False)
-        query = tf.concat(
-            [
-                next(
-                    iter(
-                        picked[idx].batch(1).prefetch(1)
-                    )
-                ) for idx in query_label
-            ]
-            , axis=0)
-        # yield (support, query), (support_label, query_label)
-        return (support, query), (support_label, query_label)
-
-
-g = gen(source_sub)
-
-
-def gen_source():
-    return gen(source_sub)
-
-
-def gen_target():
-    return gen(target_sub)
-
-
-data_source = tf.data.Dataset.from_generator(gen_source,
-                                             output_types=((tf.float32, tf.float32), (tf.float32, tf.float32)),
-                                             output_shapes=(((WAYS * SHOTS, W, H, CH), (QUERIES, W, H, CH)),
-                                                            ((WAYS * SHOTS,), (QUERIES,))))
-data_target = tf.data.Dataset.from_generator(gen_target,
-                                             output_types=((tf.float32, tf.float32), (tf.float32, tf.float32)),
-                                             output_shapes=(((WAYS * SHOTS, W, H, CH), (QUERIES, W, H, CH)),
-                                                            ((WAYS * SHOTS,), (QUERIES,))))
-
-# In[9]:
-
 
 # Hyperparameters
 BATCH_SIZE = 32
@@ -219,10 +53,6 @@ eval_batches = test_batches = 20
 
 # # 建立模型
 # 使用簡單的3層CNN模型來做backbone
-
-# In[10]:
-
-
 class MAML(keras.Model):
     def __init__(self, num_cls):
         super().__init__()
@@ -256,11 +86,195 @@ class MAML(keras.Model):
         return keras.models.Model(inputs=[x], outputs=self.forward(x))
 
 
+def gen(all_sub):
+    # 這個函數會丟進一個list的file loader，首先先permute一下順序，目的是希望打亂task進到model的順序
+    order = np.random.permutation(len(all_sub))  # why n shuffle??
+    for tasks in range(len(all_sub) // WAYS):
+        # 每次抽取WAYS個file loader，後面使用batch來抽數張照片
+        # prefetch可以將資料先放進memory中WAYS個batch，下個batch要用就會比較快
+        picked = [all_sub[tt] for tt in order[WAYS * tasks:WAYS * (tasks + 1)]]
+        # Support
+        support = tf.concat(
+            [
+                next(
+                    iter(
+                        sub.batch(SHOTS).prefetch(WAYS)
+                    )
+                ) for sub in picked
+            ]
+            , axis=0)
+        # 這邊每個task的label都是自己取的，編號從0開始加到WAYS-1
+        support_label = tf.repeat(tf.range(WAYS, dtype=tf.float32), SHOTS)
+        # Shuffle support
+        order2 = np.random.permutation(WAYS * SHOTS)
+        support = tf.stack([support[ii] for ii in order2])
+        support_label = tf.stack([support_label[ii] for ii in order2])
+
+        # Query
+        query_label = np.random.choice(range(WAYS), size=QUERIES, replace=False)
+        query = tf.concat(
+            [
+                next(
+                    iter(
+                        picked[idx].batch(1).prefetch(1)
+                    )
+                ) for idx in query_label
+            ]
+            , axis=0)
+        yield (support, query), (support_label, query_label)
+
+
+# Config
+WAYS = 3
+SHOTS = 5
+QUERIES = 1
+
+# # Data Loader
+# # 首先讀取資料夾名稱
+# DATA_DIR = './Omniglot_splited'
+# # training v.s test Omniglot classes
+# source_classes = glob(DATA_DIR + '/images_background/*/*')
+# target_classes = glob(DATA_DIR + '/images_evaluation/*/*')
+# print(f'字符種類 train: test = {len(source_classes)} : {len(target_classes)}')
+
+source_classes = glob('source/*')
+target_classes = glob('target_s/*')
+print(f'train: test = {len(source_classes)} : {len(target_classes)}')
+
+# # 觀察圖片內容
+# path = np.random.choice(glob('source/*/*.JPG'), 1)[0]
+# img = cv2.imread(path)
+# print(img.shape)
+# print(path)
+# plt.imshow(img)
+# plt.show()
+
+'''
+# #### Read Data
+# 
+# **1.製作讀取圖案並前處理的function**
+# 
+# 使用cv2.imread讀檔案時，因為後續我們會使用tf.data.Dataset.list_files來列舉檔案名稱變成tf tensor，所以使用.numpy.decode()將其解碼為文字
+# 
+# 前處理會將圖片從0-255拉到0-1之間，然後取圖片中間長寬為min_of_shape的區塊，這個大小是元圖長、寬中較小的那個值。
+# 
+# 最後RESIZE到W,H大小
+# 
+# 因為這組圖都是黑白的，所以原本的png檔讀出來後我只要RGB中任一channel就好了
+'''
+W, H, CH = 64, 64, 1
+
+
+def load_img(path, width=W, hight=H):
+    img = cv2.imread(path.numpy().decode())[..., 0].astype(np.float32) / 255.
+    min_of_shape = np.min(img.shape[:2])
+    oh = (img.shape[0] - min_of_shape) // 2
+    ow = (img.shape[1] - min_of_shape) // 2
+    center_square = np.array([width, hight]) // 2
+    new_size = (width, hight)
+
+    # cropping + resize
+    img = img[oh:oh + min_of_shape, ow:ow + min_of_shape]
+    img = np.expand_dims(cv2.resize(img, new_size), -1)
+    # img = cv2.resize(img, new_size)
+    return tf.constant(img - 0.5)
+
+
+'''
+# **2. 製作 Data Loader**
+# 使用兩層tf.data.Dataset class來完成:
+# 第一層random選取class，第二層random選取照片
+# 實作上，第一層的loader會隨機去抽第二層的loader。
+# 套用指定的way數、shot數、query數等等參數，製作data loader
+'''
+map_fun = lambda string: tf.py_function(func=load_img, inp=[string], Tout=tf.float32)
+# 指定抽照片的loader，每個class各有一個tf.data.Dataset.list_files的loader
+# 這邊要指定格式化不然會有bug, 會搜到多餘的暫存檔案
+# source_sub = [
+#     tf.data.Dataset.list_files(
+#         os.path.join(sc, '*.JPG'), shuffle=True).map(map_fun)for sc in source_classes]
+# target_sub = [
+#     tf.data.Dataset.list_files(
+#         os.path.join(sc, '*.JPG'), shuffle=True).map(map_fun) for sc in target_classes]
+
+source_sub = []
+for sc in source_classes:
+    path = os.path.join(sc, '*.JPG')
+    nd = tf.data.Dataset.list_files(path, shuffle=True).map(map_fun)
+    source_sub.append(nd)
+target_sub = []
+for sc in target_classes:
+    path = os.path.join(sc, '*.JPG')
+    nd = tf.data.Dataset.list_files(path, shuffle=True).map(map_fun)
+    target_sub.append(nd)
+
+sup_path = 'target_s'
+que_path = 'target_q'
+df = pd.read_csv('./test1.csv')
+
+
+def ts_gen():
+    # # 歷遍test 資料 (2200)
+    for i in range(len(df)):
+        # 每一筆test 有 三個類別
+        print(f'test: {i}')
+        row_data = df.iloc[i]
+        source_sub = []
+        for k in ['support_0', 'support_1', 'support_2']:
+            md = tf.data.Dataset.list_files(
+                file_pattern=os.path.join(sup_path, row_data[k], '*.JPG'),
+                shuffle=True).map(map_fun)
+            source_sub.append(md)
+
+        target_sub = tf.data.Dataset.list_files(
+            os.path.join(que_path, row_data['filename']),
+            shuffle=True).map(map_fun)
+
+        # # Support
+        data = []
+        for sub in source_sub:
+            data.append(next(iter(sub.batch(SHOTS).prefetch(WAYS))))
+        support = tf.concat(data, axis=0)
+
+        support_label = tf.repeat(tf.range(WAYS, dtype=tf.float32), SHOTS)
+        # Shuffle support
+        order2 = np.random.permutation(WAYS * SHOTS)
+        support = tf.stack([support[ii] for ii in order2])
+        support_label = tf.stack([support_label[ii] for ii in order2])
+
+        # Query
+        query = next(iter(target_sub.batch(1).prefetch(1)))
+
+        yield (support, query), (support_label,)
+
+
+def gen_source():
+    return gen(source_sub)
+
+
+def gen_target():
+    return gen(target_sub)
+
+
+def ts_gen_target():
+    return ts_gen()
+
+
+data_source = tf.data.Dataset.from_generator(gen_source,
+                                             output_types=((tf.float32, tf.float32), (tf.float32, tf.float32)),
+                                             output_shapes=(((WAYS * SHOTS, W, H, CH), (QUERIES, W, H, CH)),
+                                                            ((WAYS * SHOTS,), (QUERIES,))))
+data_target = tf.data.Dataset.from_generator(gen_target,
+                                             output_types=((tf.float32, tf.float32), (tf.float32, tf.float32)),
+                                             output_shapes=(((WAYS * SHOTS, W, H, CH), (QUERIES, W, H, CH)),
+                                                            ((WAYS * SHOTS,), (QUERIES,))))
+ts_data_target = tf.data.Dataset.from_generator(ts_gen_target,
+                                                output_types=((tf.float32, tf.float32), (tf.float32,)),
+                                                output_shapes=(((WAYS * SHOTS, W, H, CH), (QUERIES, W, H, CH)),
+                                                               (WAYS * SHOTS,)))
+
+
 # MAML需要在每次進行task training前將model weight儲存，因此先設好function
-
-# In[11]:
-
-
 def copy_model(model, x):
     copied_model = MAML(num_cls=WAYS)
     # If we don't run this step the weights are not "initialized"
@@ -276,7 +290,10 @@ def compute_loss(model, x, y):
     return loss, logits
 
 
-# In[12]:
+def ts_compute_index(model, x):
+    logits = model.forward(x)
+    # loss = keras.losses.sparse_categorical_crossentropy(y, logits)
+    return np.argmax(logits, axis=1)
 
 
 model = MAML(num_cls=WAYS)
@@ -290,10 +307,6 @@ acc_fn = keras.metrics.categorical_accuracy
 # 2. 用support data對備份model進行task training
 # 3. train完以後使用query data (_val)算meta gradient
 # 4. 對元model用meta gradient做optimize
-
-# In[13]:
-
-
 def maml(im_src_batch, label_src_batch, im_q_batch, label_q_batch,
          n_way, k_shot, q_query, loss_fn, model, inner_train_step=1,
          inner_lr=0.4, train=True):
@@ -337,21 +350,50 @@ def maml(im_src_batch, label_src_batch, im_q_batch, label_q_batch,
 
     meta_batch_loss = np.mean(val_loss)
     meta_batch_acc = np.mean(task_acc)
-    return meta_batch_loss, np.mean(task_acc)
+    return meta_batch_loss, meta_batch_acc
+
+
+def ts_maml(im_src_batch, label_src_batch, im_q_batch,
+            n_way, k_shot, q_query, loss_fn, model, inner_train_step=1,
+            inner_lr=0.4, train=True):
+    index = []
+    for images_src, image_q, labels_src in zip(im_src_batch, im_q_batch, label_src_batch):
+        model.forward(images_src)
+        # 複製meta模型參數
+        model_copy = copy_model(model, images_src)
+        with tf.GradientTape() as val_tape:
+            # 用source task的imgs & labels更新複製的模型參數
+            for inner_step in range(inner_train_step):
+                with tf.GradientTape() as train_tape:
+                    train_loss, train_logits = compute_loss(model, images_src, labels_src)
+                grads = train_tape.gradient(train_loss, model.trainable_weights)
+                # update weights for model_copy
+                k = 0
+                for j in range(len(model_copy.layers)):
+                    name = model_copy.layers[j].name
+                    if 'conv' in name or 'dense' in name:
+                        model_copy.layers[j].kernel = tf.subtract(model.layers[j].kernel,
+                                                                  tf.multiply(inner_lr, grads[k]))
+                        model_copy.layers[j].bias = tf.subtract(model.layers[j].bias,
+                                                                tf.multiply(inner_lr, grads[k + 1]))
+                        k += 2
+                    if 'batch_normalization' in name:
+                        model_copy.layers[j].gamma = tf.subtract(model.layers[j].gamma, tf.multiply(inner_lr, grads[k]))
+                        model_copy.layers[j].beta = tf.subtract(model.layers[j].beta,
+                                                                tf.multiply(inner_lr, grads[k + 1]))
+                        k += 2
+            index.extend(ts_compute_index(model_copy, image_q))
+    return index
 
 
 # # 模型訓練
 # 依照前面設好的meta learning步驟做訓練
-
-# In[14]:
-
-
 for epoch in tqdm(range(max_epoch)):
     print(f'Epoch: {epoch}')
     train_meta_loss = []
     train_acc = []
     # 使用source dataset 訓練模型
-    for (im_src_batch, im_q_batch), (label_src_batch, label_q_batch) in tqdm(data_source.batch(BATCH_SIZE)):
+    for (im_src_batch, im_q_batch), (label_src_batch, label_q_batch) in data_source.batch(BATCH_SIZE):
         loss_train, acc_train = maml(im_src_batch, label_src_batch, im_q_batch, label_q_batch,
                                      WAYS, SHOTS, QUERIES, loss_fn, inner_train_step=1, model=model)
         train_meta_loss.append(loss_train)
@@ -359,23 +401,27 @@ for epoch in tqdm(range(max_epoch)):
     print('train loss ', np.mean(train_meta_loss))
     print('train acc ', np.mean(train_acc))
 
-    # # 使用 target dataset 驗證模型
-    # val_acc = []
-    # val_loss = []
-    # for (im_src_batch, im_q_batch), (label_src_batch, label_q_batch) in data_target.batch(BATCH_SIZE):
-    #     loss, acc = maml(im_src_batch, label_src_batch, im_q_batch, label_q_batch,
-    #                      WAYS, SHOTS, QUERIES, loss_fn, inner_train_step=3, train=False, model=model)
-    #     val_acc.append(acc)
-    #     val_loss.append(loss)
-    # print(f'\n val acc : {np.mean(val_acc)} val_loss: {np.mean(val_loss)}')
+    # 使用 target dataset 驗證模型
+    val_acc = []
+    val_loss = []
+    for (im_src_batch, im_q_batch), (label_src_batch, label_q_batch) in data_target.batch(BATCH_SIZE):
+        loss, acc = maml(im_src_batch, label_src_batch, im_q_batch, label_q_batch,
+                         WAYS, SHOTS, QUERIES, loss_fn, inner_train_step=3, train=False, model=model)
+        val_acc.append(acc)
+        val_loss.append(loss)
+    print(f'\n val acc : {np.mean(val_acc)} val_loss: {np.mean(val_loss)}')
 
+# Test
+all_result = []
+for (im_src_batch, im_q_batch), (label_src_batch,) in ts_data_target.batch(50):
+    print('in')
+    result = ts_maml(im_src_batch, label_src_batch, im_q_batch,
+                     WAYS, SHOTS, QUERIES, loss_fn, inner_train_step=3, train=False, model=model)
+    all_result.extend(result)
+print(len(all_result))
 
-import pandas as pd
-sup_path = 'target_s'
-que_path = 'target_q'
-df = pd.read_csv('./test1.csv')
-
-for i in range(len(df)):
-    print(i)
-    df[i:i]
-
+# Write to csv
+df = pd.read_csv('SampleSubmission1.csv')
+df['ans'] = all_result
+df.to_csv('Submission1.csv', index=False)
+print('Done.')
