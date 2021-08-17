@@ -16,22 +16,22 @@ import cv2
 from tqdm.auto import tqdm
 import os
 
-os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
+# os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 
 train_data_path = "source"
-val_data_path = 'target_s'
+# val_data_path = 'target_s'
 
 batch_size = 32
 val_batch_size = 20
-epochs = 30 # 10
+epochs = 10
 inner_lr = 0.02
 
 n_way = 3
 k_shot = 5
 q_query = 1
 
-width = 128 # 64
-hight = 128 # 64
+width = 64
+hight = 64
 input_shape = (width, hight, 1)
 outer_lr = 0.0001
 
@@ -148,12 +148,12 @@ train_loader = MetaDataLoader(train_data_path, batch_size, n_way=n_way, k_shot=k
 support_imgs, support_labels, q_imgs, q_labels = train_loader.get_one_task_data()
 
 
-plt.figure(figsize=(20, 10))
-for i in range(len(support_imgs)):
-    plt.subplot(3, 5, i + 1)
-    plt.title(f'label: {support_labels[i]}')
-    plt.imshow(support_imgs[i, :, :, 0], cmap='gray')
-plt.show()
+# plt.figure(figsize=(20, 10))
+# for i in range(len(support_imgs)):
+#     plt.subplot(3, 5, i + 1)
+#     plt.title(f'label: {support_labels[i]}')
+#     plt.imshow(support_imgs[i, :, :, 0], cmap='gray')
+# plt.show()
 
 
 # ## Build the model
