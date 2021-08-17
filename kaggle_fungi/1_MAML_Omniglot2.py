@@ -190,26 +190,13 @@ def load_img(path, width=W, hight=H):
 map_fun = lambda string: tf.py_function(func=load_img, inp=[string], Tout=tf.float32)
 # 指定抽照片的loader，每個class各有一個tf.data.Dataset.list_files的loader
 # 這邊要指定格式化不然會有bug, 會搜到多餘的暫存檔案
-# source_sub = [
-#     tf.data.Dataset.list_files(
-#         os.path.join(sc, '*.JPG'), shuffle=True).map(map_fun)for sc in source_classes]
-# target_sub = [
-#     tf.data.Dataset.list_files(
-#         os.path.join(sc, '*.JPG'), shuffle=True).map(map_fun) for sc in target_classes]
+source_sub = [
+    tf.data.Dataset.list_files(
+        os.path.join(sc, '*.JPG'), shuffle=True).map(map_fun) for sc in source_classes]
+target_sub = [
+    tf.data.Dataset.list_files(
+        os.path.join(sc, '*.JPG'), shuffle=True).map(map_fun) for sc in target_classes]
 
-source_sub = []
-for sc in source_classes:
-    path = os.path.join(sc, '*.JPG')
-    nd = tf.data.Dataset.list_files(path, shuffle=True).map(map_fun)
-    source_sub.append(nd)
-target_sub = []
-for sc in target_classes:
-    path = os.path.join(sc, '*.JPG')
-    nd = tf.data.Dataset.list_files(path, shuffle=True).map(map_fun)
-    target_sub.append(nd)
-
-sup_path = 'target_s'
-que_path = 'target_q'
 df = pd.read_csv('./test1.csv')
 
 
@@ -222,12 +209,12 @@ def ts_gen():
         source_sub = []
         for k in ['support_0', 'support_1', 'support_2']:
             md = tf.data.Dataset.list_files(
-                file_pattern=os.path.join(sup_path, row_data[k], '*.JPG'),
+                file_pattern=os.path.join('target_s', row_data[k], '*.JPG'),
                 shuffle=True).map(map_fun)
             source_sub.append(md)
 
         target_sub = tf.data.Dataset.list_files(
-            os.path.join(que_path, row_data['filename']),
+            os.path.join('target_q', row_data['filename']),
             shuffle=True).map(map_fun)
 
         # # Support
@@ -244,7 +231,6 @@ def ts_gen():
 
         # Query
         query = next(iter(target_sub.batch(1).prefetch(1)))
-
         yield (support, query), (support_label,)
 
 
