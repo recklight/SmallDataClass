@@ -193,9 +193,9 @@ map_fun = lambda string: tf.py_function(func=load_img, inp=[string], Tout=tf.flo
 source_sub = [
     tf.data.Dataset.list_files(
         os.path.join(sc, '*.JPG'), shuffle=True).map(map_fun) for sc in source_classes]
-target_sub = [
-    tf.data.Dataset.list_files(
-        os.path.join(sc, '*.JPG'), shuffle=True).map(map_fun) for sc in target_classes]
+# target_sub = [
+#     tf.data.Dataset.list_files(
+#         os.path.join(sc, '*.JPG'), shuffle=True).map(map_fun) for sc in target_classes]
 
 df = pd.read_csv('./test1.csv')
 
@@ -213,7 +213,7 @@ def ts_gen():
                 shuffle=True).map(map_fun)
             source_sub.append(md)
 
-        target_sub = tf.data.Dataset.list_files(
+        ts_target_sub = tf.data.Dataset.list_files(
             os.path.join('target_q', row_data['filename']),
             shuffle=True).map(map_fun)
 
@@ -230,7 +230,7 @@ def ts_gen():
         support_label = tf.stack([support_label[ii] for ii in order2])
 
         # Query
-        query = next(iter(target_sub.batch(1).prefetch(1)))
+        query = next(iter(ts_target_sub.batch(1).prefetch(1)))
         yield (support, query), (support_label,)
 
 
@@ -238,8 +238,8 @@ def gen_source():
     return gen(source_sub)
 
 
-def gen_target():
-    return gen(target_sub)
+# def gen_target():
+#     return gen(target_sub)
 
 
 def ts_gen_target():
@@ -250,10 +250,10 @@ data_source = tf.data.Dataset.from_generator(gen_source,
                                              output_types=((tf.float32, tf.float32), (tf.float32, tf.float32)),
                                              output_shapes=(((WAYS * SHOTS, W, H, CH), (QUERIES, W, H, CH)),
                                                             ((WAYS * SHOTS,), (QUERIES,))))
-data_target = tf.data.Dataset.from_generator(gen_target,
-                                             output_types=((tf.float32, tf.float32), (tf.float32, tf.float32)),
-                                             output_shapes=(((WAYS * SHOTS, W, H, CH), (QUERIES, W, H, CH)),
-                                                            ((WAYS * SHOTS,), (QUERIES,))))
+# data_target = tf.data.Dataset.from_generator(gen_target,
+#                                              output_types=((tf.float32, tf.float32), (tf.float32, tf.float32)),
+#                                              output_shapes=(((WAYS * SHOTS, W, H, CH), (QUERIES, W, H, CH)),
+#                                                             ((WAYS * SHOTS,), (QUERIES,))))
 ts_data_target = tf.data.Dataset.from_generator(ts_gen_target,
                                                 output_types=((tf.float32, tf.float32), (tf.float32,)),
                                                 output_shapes=(((WAYS * SHOTS, W, H, CH), (QUERIES, W, H, CH)),
@@ -326,7 +326,8 @@ def maml(im_src_batch, label_src_batch, im_q_batch, label_q_batch,
             # 計算訓練過的model_copy在query資料上的loss
             val_loss, val_logits = compute_loss(model_copy, image_q, labels_q)
         task_loss.append(val_loss)
-        acc = acc_fn(labels_q, val_logits).numpy().mean()
+        # acc = acc_fn(labels_q, val_logits).numpy().mean()
+        acc = 1 if np.argmax(val_logits, axis=1) == labels_q.numpy() else 0
         task_acc.append(acc)
 
         # 用模型在 query 上的結果更新meta模型
@@ -387,17 +388,17 @@ for epoch in tqdm(range(max_epoch)):
     print('train loss ', np.mean(train_meta_loss))
     print('train acc ', np.mean(train_acc))
 
-    # 使用 target dataset 驗證模型
-    val_acc = []
-    val_loss = []
-    for (im_src_batch, im_q_batch), (label_src_batch, label_q_batch) in data_target.batch(BATCH_SIZE):
-        loss, acc = maml(im_src_batch, label_src_batch, im_q_batch, label_q_batch,
-                         WAYS, SHOTS, QUERIES, loss_fn, inner_train_step=3, train=False, model=model)
-        val_acc.append(acc)
-        val_loss.append(loss)
-    print(f'\n val acc : {np.mean(val_acc)} val_loss: {np.mean(val_loss)}')
+    # # 使用 target dataset 驗證模型
+    # val_acc = []
+    # val_loss = []
+    # for (im_src_batch, im_q_batch), (label_src_batch, label_q_batch) in data_target.batch(BATCH_SIZE):
+    #     loss, acc = maml(im_src_batch, label_src_batch, im_q_batch, label_q_batch,
+    #                      WAYS, SHOTS, QUERIES, loss_fn, inner_train_step=3, train=False, model=model)
+    #     val_acc.append(acc)
+    #     val_loss.append(loss)
+    # print(f'\n val acc : {np.mean(val_acc)} val_loss: {np.mean(val_loss)}')
 
-# Test
+# pred
 all_result = []
 for (im_src_batch, im_q_batch), (label_src_batch,) in ts_data_target.batch(50):
     print('in')
