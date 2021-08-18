@@ -46,49 +46,44 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 from functools import partial
 from sklearn.model_selection import train_test_split
-# '''Tensorflow'''
 import tensorflow as tf
 import pandas as pd
 from tensorflow import keras
 from tensorflow.keras import callbacks as cb
 from tensorflow.keras import backend as K
-from tensorflow.keras.layers import Input, Lambda, Dense, Dropout, Conv2D, MaxPooling2D, Flatten,Activation,BatchNormalization
+from tensorflow.keras.layers import Input, Lambda, Dense, Dropout, Conv2D, MaxPooling2D, Flatten, Activation, \
+    BatchNormalization
 from tensorflow.keras.models import Sequential, Model
 from tensorflow.keras.losses import CategoricalCrossentropy
-from tensorflow.keras.applications.efficientnet import preprocess_input,EfficientNetB0
+from tensorflow.keras.applications.efficientnet import preprocess_input, EfficientNetB0
 
 gpus = tf.config.experimental.list_physical_devices(device_type='GPU')
 for gpu in gpus:
-    tf.config.experimental.set_memory_growth( device=gpu, enable=True)
-if len(gpus)>1:
-    os.environ["CUDA_VISIBLE_DEVICES"] = f"{len(gpus)-1}"
-
+    tf.config.experimental.set_memory_growth(device=gpu, enable=True)
+if len(gpus) > 1:
+    os.environ["CUDA_VISIBLE_DEVICES"] = f"{len(gpus) - 1}"
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = "2"
 # 先設定讀取圖片程式，這個資料集圖檔讀取方式需自訂，要輸入圖片的和寬、高、最大值，其中header是圖檔的標頭，讀取時要略過
-# 
 # 圖片路徑為{orl_faces資料夾}/s1到s40
-# 
 # 每個subject的圖片放在不同資料夾
+W, H, CH = 64, 64, 1
 
-# In[2]:
 
-
-W,H,CH = 64,64,1
-
-'''完整影像讀取程式，含pre-process'''
-def load_img(path, width = W):
+def load_img(path, width=W):
     img = cv2.imread(path.numpy().decode())[..., 0].astype(np.float32) / 255.
     shape_dst = np.min(img.shape[:2])
     oh = (img.shape[0] - shape_dst) // 2
     ow = (img.shape[1] - shape_dst) // 2
-    center_square = np.array([width,width])// 2
-    new_size=(width,width)
-    
+    center_square = np.array([width, width]) // 2
+    new_size = (width, width)
+
     # cropping + resize
     img = img[oh:oh + shape_dst, ow:ow + shape_dst]
-    img=np.expand_dims(cv2.resize(img, new_size),-1)
+    img = np.expand_dims(cv2.resize(img, new_size), -1)
     return tf.constant(img)
-SUFFIX='.JPG'
 
+
+SUFFIX = '.JPG'
 
 # 這次要做5 way 3 shot的data loader，且support中每個class都抽一個query
 # 
@@ -105,9 +100,9 @@ SUFFIX='.JPG'
 
 
 WAYS = 3
-SHOTS=5
-QUERIES=1
-BATCH_SIZE=8
+SHOTS = 5
+QUERIES = 1
+BATCH_SIZE = 8
 
 np.random.seed(2021)
 tf.random.set_seed(2021)
@@ -121,7 +116,7 @@ tf.random.set_seed(2021)
 # print(f"total {len(all_classes)} classes=source {sorce_len} + target {target_len} classes")
 
 source_classes = glob('source/*')
-sorce_len=len(source_classes)
+sorce_len = len(source_classes)
 print(f"source: {sorce_len}")
 
 # 篩掉圖片數不滿足的人
@@ -138,154 +133,104 @@ print(f"source: {sorce_len}")
 
 # 建立每個人的loader，隨意從每個人的圖片中抽取 (尚未指定張數)
 # '''Mapping function for loading'''
-map_fun=lambda string: tf.py_function(func=load_img,inp=[string], Tout=tf.float32)
+map_fun = lambda string: tf.py_function(func=load_img, inp=[string], Tout=tf.float32)
 # '''Source set中每個人都有一個tf Dataset loader'''
 source_sup_sub = [
-    tf.data.Dataset.list_files(glob(join(sc,'*'+SUFFIX)), shuffle=True)
-    .map(map_fun).cache()
+    tf.data.Dataset.list_files(glob(join(sc, '*' + SUFFIX)), shuffle=True)
+        .map(map_fun).cache()
     for sc in source_classes
 ]
-# source_q_sub = source_sup_sub.copy()
-# source_q_sub = [
-#     tf.data.Dataset.list_files(glob(join(sc,'*'+SUFFIX)), shuffle=True)
-#     .map(map_fun).cache()
-#     for sc in source_classes
-# ]
-# '''Target set中每個人都有一個tf Dataset loader'''
-# target_sup_sub = [
-#     tf.data.Dataset.list_files(glob(join(sc,'*'+SUFFIX)), shuffle=True)
-#     .map(map_fun).cache()
-#     for sc in target_classes
-# ]
-# target_q_sub = [
-#     tf.data.Dataset.list_files(glob(join(sc,'*'+SUFFIX)), shuffle=True)
-#     .map(map_fun).cache()
-#     for sc in target_classes
-# ]
-
 
 # **將所有可能run過一遍，讓cache記得**
-for sub in source_sup_sub :
+for sub in source_sup_sub:
     for x in iter(sub.batch(10)):
         pass
-# for sub in source_q_sub :
-#     for x in iter(sub.batch(10)):
-#         pass
-
-# for sub in target_sup_sub :
-#     for x in iter(sub.batch(10)):
-#         pass
-# for sub in target_q_sub :
-#     for x in iter(sub.batch(10)):
-#         pass
 
 
 # 建立每個task的loader，隨意從WAY個人抽取SHOT張，並再隨機指派每個way的class是從0~WAY-1的哪一個
 def gen(all_sub):
-    order = np.random.permutation(len(all_sub))  # why n shuffle??
+    order = np.random.permutation(len(all_sub))
+    '''For each task'''
     for tasks in range(len(all_sub) // WAYS):
+        '''從已決定好的順序拉出WAY個人'''
         picked = [all_sub[tt] for tt in order[WAYS * tasks:WAYS * (tasks + 1)]]
-        # Support
+        '''support每個人各有SHOTS張照片'''
         support = tf.concat(
             [
                 next(
                     iter(
-                        sub.batch(SHOTS).prefetch(WAYS)
+                        sub.batch(SHOTS)
                     )
                 ) for sub in picked
             ]
             , axis=0)
-        # 這邊每個task的label都是自己取的，編號從0開始加到WAYS-1
-        support_label = tf.repeat(tf.range(WAYS, dtype=tf.float32), SHOTS)
-        # Shuffle support
-        order2 = np.random.permutation(WAYS * SHOTS)
-        support = tf.stack([support[ii] for ii in order2])
-        support_label = tf.stack([support_label[ii] for ii in order2])
-
-        # Query
-        query_label = np.random.choice(range(WAYS), size=QUERIES, replace=False)
+        '''query挑WAY人中的QUERY張，這邊是設定每張屬於不同人，順序不固定'''
+        idxs = np.random.choice(range(WAYS), size=QUERIES, replace=False)
         query = tf.concat(
             [
                 next(
                     iter(
-                        picked[idx].batch(1).prefetch(1)
+                        picked[idx].batch(1)
                     )
-                ) for idx in query_label
+                ) for idx in idxs
             ]
             , axis=0)
-
-        # oh_support_label = keras.utils.to_categorical(support_label, num_classes=WAYS)
-        # oh_query_label = keras.utils.to_categorical(query_label, num_classes=WAYS)
-        # return tf.concat([support, query], axis=0), \
-        #        tf.stack(np.concatenate((oh_support_label,oh_query_label), axis=0))
-        # return tf.concat([support, query], axis=0),\
-        #        tf.stack([keras.utils.to_categorical(idx, num_classes=WAYS) for idx in query_label], axis=0)
+        '''輸出的時候把support跟query接在一起'''
         yield tf.concat([support, query], axis=0), \
-               tf.stack([keras.utils.to_categorical(idx, num_classes=WAYS) for idx in query_label], axis=0)
+              tf.stack([keras.utils.to_categorical(idx, num_classes=WAYS) for idx in idxs], axis=0)
 
 
-df = pd.read_csv('./test1.csv')
+df = pd.read_csv('./test2.csv')
+
+
 def ts_gen():
     # # 歷遍test 資料 (2200)
     for i in range(len(df)):
         # 每一筆test 有 三個類別
         print(f'test: {i}')
         row_data = df.iloc[i]
-        source_sub = []
-        for k in ['support_0', 'support_1', 'support_2']:
+        ts_sup_sub = []
+        for index, k in enumerate(['support_0', 'support_1', 'support_2']):
             md = tf.data.Dataset.list_files(
-                file_pattern=os.path.join('target_s', row_data[k], '*.JPG'),
-                shuffle=True).map(map_fun)
-            source_sub.append(md)
+                glob(join('target_s', row_data[k], '*' + SUFFIX)), shuffle=True).map(map_fun).cache()
+            ts_sup_sub.append(md)
 
         ts_target_sub = tf.data.Dataset.list_files(
-            os.path.join('target_q', row_data['filename']),
-            shuffle=True).map(map_fun)
+            os.path.join('target_q', row_data['filename'])).map(map_fun)
 
+        for sub in ts_sup_sub:
+            for x in iter(sub.batch(5)):
+                pass
         # # Support
         data = []
-        for sub in source_sub:
-            data.append(next(iter(sub.batch(SHOTS).prefetch(WAYS))))
+        for sub in ts_sup_sub:
+            data.append(next(iter(sub.batch(SHOTS))))
         support = tf.concat(data, axis=0)
-
-        support_label = tf.repeat(tf.range(WAYS, dtype=tf.float32), SHOTS)
-        # Shuffle support
-        order2 = np.random.permutation(WAYS * SHOTS)
-        support = tf.stack([support[ii] for ii in order2])
-        support_label = tf.stack([support_label[ii] for ii in order2])
-
         # Query
-        query = next(iter(ts_target_sub.batch(1).prefetch(1)))
+        query = next(iter(ts_target_sub.batch(SHOTS)))
         yield tf.concat([support, query], axis=0)
-        # return  tf.concat([support, query], axis=0)
+
 
 # 建立data generator，可以一次抽一個meta batch的資料
 # 1. 要input一個function(這邊用partial產生一個預先設定好參數的function)
 # 1. output types要對好前面的格式
 # 2. output shape要給對
-# g=gen(source_sup_sub)
-# g = ts_gen()
-MLUT=16
+
+MLUT = 16
 data_source = tf.data.Dataset.from_generator(
-    partial(gen,source_sup_sub),
-    output_types=(tf.float32,tf.float32),
-    output_shapes=((WAYS*SHOTS+QUERIES,W,H,CH),(QUERIES,WAYS))
+    partial(gen, source_sup_sub),
+    output_types=(tf.float32, tf.float32),
+    output_shapes=((WAYS * SHOTS + QUERIES, W, H, CH), (QUERIES, WAYS))
 ).repeat(MLUT).shuffle(buffer_size=999).cache().batch(BATCH_SIZE).prefetch(MLUT)
 data_target = tf.data.Dataset.from_generator(
     ts_gen,
     output_types=(tf.float32),
-    output_shapes=(WAYS*SHOTS+QUERIES,W,H,CH)
-).repeat(MLUT*4).batch(BATCH_SIZE)
+    output_shapes=(WAYS * SHOTS + QUERIES, W, H, CH))
 
 
 # 可以看一下每次sample出來的東西
 # * X:共BATCH_SIZE個meta batch,有WAYS*SHOTS+QUERIES個圖，每個圖WxHxCH大小
 # * y:共QUERIES個答案
-
-
-# for source_x,source_y in data_source:
-#     break
-
 
 # plt.figure(figsize=(20,6));ee=1
 # batch=0
@@ -300,114 +245,106 @@ data_target = tf.data.Dataset.from_generator(
 #     plt.title(f"{source_y[batch,jj].numpy().argmax(-1)}");plt.axis("off");ee+=1
 # plt.show()
 
-
-for source_x,source_y in data_source:
-    break
-print(source_x.shape,source_x.numpy().min(),source_x.numpy().max())
-print(source_y.shape,source_y.numpy().min(),source_y.numpy().max())
-print(source_y.numpy().argmax(-1))
-
-# for target_x,target_y in data_target:
+# for source_x, source_y in data_source:
+#     print(source_x.shape, source_x.numpy().min(), source_x.numpy().max())
+#     print(source_y.shape, source_y.numpy().min(), source_y.numpy().max())
+#     print(source_y.numpy().argmax(-1))
 #     break
-# print(target_x.shape,target_x.numpy().min(),target_x.numpy().max())
-# print(target_y.shape,target_y.numpy().min(),target_y.numpy().max())
-# print(target_y.numpy().argmax(-1))
+#
+# for target_x,target_y in data_target:
+#     print(target_x.shape, target_x.numpy().min(), target_x.numpy().max())
+#     print(target_y.shape, target_y.numpy().min(), target_y.numpy().max())
+#     print(target_y.numpy().argmax(-1))
+#     break
 
 
 # # 建立模型
 # 按圖索驥，開始組裝network，會有base netwok(for embedding)還有relation network。
-# 
 # * base netwok：由convolution networks組成。
-# 
 # * relation net：用convolution network以及densenet組成，output使用sigmoid讓數值介於0~1之間。
-
 # Embedding function
 def conv_net(input_shape):
     convnet = Sequential()
     for i in range(3):
-        convnet.add(Conv2D(64,(3,3),padding='valid',input_shape=input_shape))
+        convnet.add(Conv2D(64, (3, 3), padding='valid', input_shape=input_shape))
         convnet.add(BatchNormalization())
         convnet.add(Activation('relu'))
         convnet.add(MaxPooling2D())
     return convnet
+
+
 def build_relation_network(input_shape):
     seq = Sequential()
-    #layer1
+    # layer1
     seq.add(Conv2D(64, kernel_size=3, input_shape=input_shape,
-                           padding="valid",activation='relu'))
-    seq.add(BatchNormalization()) 
-    seq.add(MaxPooling2D(pool_size=(2, 2)))  
-#     seq.add(Dropout(.1))
-    
+                   padding="valid", activation='relu'))
+    seq.add(BatchNormalization())
+    seq.add(MaxPooling2D(pool_size=(2, 2)))
+    #     seq.add(Dropout(.1))
+
     seq.add(Flatten())
     seq.add(Dense(8, activation='relu'))
-#     seq.add(Dropout(0.1))
+    #     seq.add(Dropout(0.1))
     seq.add(Dense(1, activation=None))
     return seq
 
 
 # 接著組裝network。
-# 
 # 這個例子裏面給query用的input再加上每個class的example共有6個，每組訓練資料都要讀取6張圖。
-# 
 # 接著將每張圖拿去base_network做成feature maps，
-# 
 # 這個network的output與傳統classificaiton一樣，所以也可以使用categorical cross entropy作為loss function。
 
-base_dim = (W,H,CH)
+base_dim = (W, H, CH)
 base_network = conv_net(base_dim)
 # Query feature
-x_in=Input(shape=(WAYS*SHOTS+QUERIES,W,H,CH))
-latent_s=[base_network(x_in[:,ii]) for ii in range(WAYS*SHOTS)]
-latent_q=[base_network(x_in[:,WAYS*SHOTS+ii]) for ii in range(QUERIES)]
+x_in = Input(shape=(WAYS * SHOTS + QUERIES, W, H, CH))
+latent_s = [base_network(x_in[:, ii]) for ii in range(WAYS * SHOTS)]
+latent_q = [base_network(x_in[:, WAYS * SHOTS + ii]) for ii in range(QUERIES)]
 
-relation_net=build_relation_network((latent_q[0].shape[-3],latent_q[0].shape[-2],latent_q[0].shape[-1]*2))
+relation_net = build_relation_network((latent_q[0].shape[-3], latent_q[0].shape[-2], latent_q[0].shape[-1] * 2))
 
-y=[]
+y = []
 for q in latent_q:
-    relation_score=[]
+    relation_score = []
     for ww in range(WAYS):
-        relation=[relation_net(tf.concat([q,s],-1)) for s in latent_s[ww*SHOTS:(ww+1)*SHOTS]]
-        relation_score.append(tf.reduce_mean(tf.concat(relation,-1),-1,keepdims=True))
-        
-    y.append(tf.nn.softmax(tf.concat(relation_score,-1),-1))
-pred=tf.stack(y,1)
+        relation = [relation_net(tf.concat([q, s], -1)) for s in latent_s[ww * SHOTS:(ww + 1) * SHOTS]]
+        relation_score.append(tf.reduce_mean(tf.concat(relation, -1), -1, keepdims=True))
+
+    y.append(tf.nn.softmax(tf.concat(relation_score, -1), -1))
+pred = tf.stack(y, 1)
 
 model = Model(inputs=x_in, outputs=pred)
 
-
-lr=0.001
-reduce_lr = cb.ReduceLROnPlateau(monitor='val_loss', factor=0.1,patience=6, min_lr=1e-8, verbose=1)
+lr = 0.001
+reduce_lr = cb.ReduceLROnPlateau(monitor='val_loss', factor=0.1, patience=6, min_lr=1e-8, verbose=1)
 tensorboard = cb.TensorBoard(log_dir="tf_relation_logs")
-earlystop=cb.EarlyStopping(monitor='val_loss',patience=10,restore_best_weights=True, verbose=1)
+earlystop = cb.EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True, verbose=1)
 opt = tf.keras.optimizers.Adam(lr=lr)
 model.compile(loss=CategoricalCrossentropy(), optimizer=opt, metrics=['acc'])
-
 
 # # 模型訓練
 # 訓練使用10 epoch、batch size為32個tasks，
 # 在訓練時再使用validation split驗證loss是否下降，或者只是over fitting。
 
 
-EPOCHS=10 #400
-# %%time
+EPOCHS = 400  # 400
 try:
     model.fit(data_source,
-              epochs=EPOCHS, verbose=1,workers=4,
-              callbacks=[reduce_lr,earlystop, tensorboard],
+              epochs=EPOCHS, verbose=1, workers=4,
+              callbacks=[reduce_lr, earlystop, tensorboard],
               validation_data=data_source)
 except KeyboardInterrupt:
     print("KeyboardInterrupt")
 
-
 # # 預測結果
-# model.input_shape
-# model.output_shape
-# eva = model.evaluate(data_target, verbose=2)
-pre = model.predict(data_target)
+all_result = []
+for batch in data_target.batch(50):
+    pre = model.predict(batch)
+    print(pre.shape)
+    for i in pre:
+        all_result.extend(np.argmax(i, axis=1))
 
-#
-df = pd.read_csv('SampleSubmission1.csv')
+df = pd.read_csv('SampleSubmission2.csv')
 df['ans'] = all_result
-df.to_csv('Submission1.csv', index=False)
+df.to_csv('Submission2.csv', index=False)
 print('Done.')
