@@ -327,7 +327,7 @@ model.compile(loss=CategoricalCrossentropy(), optimizer=opt, metrics=['acc'])
 # 在訓練時再使用validation split驗證loss是否下降，或者只是over fitting。
 
 
-EPOCHS = 300  # 400
+EPOCHS = 200  # 400
 try:
     model.fit(data_source,
               epochs=EPOCHS, verbose=1, workers=4,
