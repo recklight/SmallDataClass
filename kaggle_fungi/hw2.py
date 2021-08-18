@@ -256,9 +256,8 @@ def ts_gen():
 
         # Query
         query = next(iter(ts_target_sub.batch(1).prefetch(1)))
-        # yield (support, query), (support_label,)
-
-        return  tf.concat([support, query], axis=0)
+        yield tf.concat([support, query], axis=0)
+        # return  tf.concat([support, query], axis=0)
 
 # 建立data generator，可以一次抽一個meta batch的資料
 # 1. 要input一個function(這邊用partial產生一個預先設定好參數的function)
@@ -272,11 +271,11 @@ data_source = tf.data.Dataset.from_generator(
     output_types=(tf.float32,tf.float32),
     output_shapes=((WAYS*SHOTS+QUERIES,W,H,CH),(QUERIES,WAYS))
 ).repeat(MLUT).shuffle(buffer_size=999).cache().batch(BATCH_SIZE).prefetch(MLUT)
-# data_target = tf.data.Dataset.from_generator(
-#     ts_gen,
-#     output_types=(tf.float32,tf.float32),
-#     output_shapes=((WAYS*SHOTS+QUERIES,W,H,CH),)
-# ).repeat(MLUT*4).batch(BATCH_SIZE)
+data_target = tf.data.Dataset.from_generator(
+    ts_gen,
+    output_types=(tf.float32,tf.float32),
+    output_shapes=((WAYS*SHOTS+QUERIES,W,H,CH),)
+).repeat(MLUT*4).batch(BATCH_SIZE)
 
 
 # 可以看一下每次sample出來的東西
