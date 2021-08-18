@@ -273,8 +273,8 @@ data_source = tf.data.Dataset.from_generator(
 ).repeat(MLUT).shuffle(buffer_size=999).cache().batch(BATCH_SIZE).prefetch(MLUT)
 data_target = tf.data.Dataset.from_generator(
     ts_gen,
-    output_types=(tf.float32,tf.float32),
-    output_shapes=((WAYS*SHOTS+QUERIES,W,H,CH),)
+    output_types=(tf.float32),
+    output_shapes=(WAYS*SHOTS+QUERIES,W,H,CH)
 ).repeat(MLUT*4).batch(BATCH_SIZE)
 
 
@@ -403,10 +403,11 @@ except KeyboardInterrupt:
 # # 預測結果
 # model.input_shape
 # model.output_shape
-
-eva = model.evaluate(data_target, verbose=2)
+# eva = model.evaluate(data_target, verbose=2)
 pre = model.predict(data_target)
 
-for i ,j in data_target:
-    # print(i.shape)
-    print(j.shape)
+#
+df = pd.read_csv('SampleSubmission1.csv')
+df['ans'] = all_result
+df.to_csv('Submission1.csv', index=False)
+print('Done.')
